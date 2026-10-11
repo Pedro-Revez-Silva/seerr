@@ -8,6 +8,21 @@ import time
 import urllib.request
 import xml.etree.ElementTree as ET
 
+# Portugas's Prowlarr definition appends this suffix only when audio_pt is true.
+# A filename containing PT-PT alone can describe subtitles and is insufficient.
+PT_PT_AUDIO_MARKER = r'(?i)(?<![a-z])Portuguese[ \t]+PT-PT[ \t]*$'
+
+
+def required_pt_pt_format():
+    return {
+        'name': 'PT-PT Audio Required', 'includeCustomFormatWhenRenaming': True,
+        'specifications': [{
+            'name': 'Portugas Portugal audio flag', 'implementation': 'ReleaseTitleSpecification',
+            'negate': False, 'required': True,
+            'fields': [{'name': 'value', 'value': PT_PT_AUDIO_MARKER}],
+        }],
+    }
+
 
 def main():
     os.umask(0o077)
@@ -31,14 +46,7 @@ def main():
     }, indent=2))
     name = 'PT-PT Audio Required'
     custom = next((f for f in formats if f['name'] == name), None)
-    desired = {
-        'name': name, 'includeCustomFormatWhenRenaming': True,
-        'specifications': [{
-            'name': 'Explicit Portugal audio', 'implementation': 'ReleaseTitleSpecification',
-            'negate': False, 'required': True,
-            'fields': [{'name': 'value', 'value': r'(?i)(?<![a-z])pt[-_. ]?pt(?![a-z])|portuguese[ ._-]*(?:\(portugal\)|portugal)|portugu[eê]s[ ._-]*(?:de[ ._-]*)?portugal'}],
-        }],
-    }
+    desired = required_pt_pt_format()
     if custom:
         custom = api(f'customformat/{custom["id"]}', {**desired, 'id': custom['id']}, 'PUT')
     else:
