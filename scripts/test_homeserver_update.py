@@ -1,4 +1,5 @@
 import importlib.util
+import os
 from pathlib import Path
 import sqlite3
 import tempfile
@@ -11,6 +12,16 @@ spec.loader.exec_module(updater)
 
 
 class DeploymentRollback(unittest.TestCase):
+    def test_snap_staging_uses_its_accessible_disk_cache(self):
+        with patch.object(updater.shutil, 'which', return_value='/snap/bin/docker'), patch.object(Path, 'mkdir'), patch.dict(os.environ, {'TMPDIR': '/var/cache/custom'}):
+            root = updater.scratch_directory()
+            self.assertEqual(root, Path.home() / 'snap/docker/common/agent-tmp')
+            self.assertEqual(os.environ['TMPDIR'], str(root))
+
+    def test_native_docker_respects_configured_disk_scratch(self):
+        with patch.object(updater.shutil, 'which', return_value='/usr/bin/docker'), patch.object(Path, 'mkdir'), patch.dict(os.environ, {'TMPDIR': '/var/cache/custom'}):
+            self.assertEqual(updater.scratch_directory(), Path('/var/cache/custom'))
+
     def test_failed_live_verification_restores_database_and_image(self):
         root = Path.home() / '.cache/agent-tmp'
         root.mkdir(parents=True, exist_ok=True)

@@ -28,6 +28,19 @@ def api(path):
         return json.load(response)
 
 
+def scratch_directory():
+    docker = shutil.which('docker')
+    # Docker's Snap cannot read hidden home directories, including .cache.
+    # Its own disk-backed cache is accessible to both buildx and bind mounts.
+    if docker and (str(Path(docker)).startswith('/snap/') or Path(docker).resolve().name == 'snap'):
+        root = Path.home() / 'snap/docker/common/agent-tmp'
+    else:
+        root = Path(os.environ.get('TMPDIR', Path.home() / '.cache/agent-tmp'))
+    root.mkdir(parents=True, exist_ok=True, mode=0o700)
+    os.environ['TMPDIR'] = str(root)
+    return root
+
+
 SMOKE = r'''
 const fs = require('fs');
 const {decideMovieAudio} = require('/app/dist/lib/movieAudioPolicy');
@@ -145,9 +158,7 @@ def main():
     args.root.mkdir(parents=True, exist_ok=True, mode=0o700)
     lock = (args.root / 'update.lock').open('w')
     fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    scratch = Path.home() / '.cache/agent-tmp'
-    scratch.mkdir(parents=True, exist_ok=True)
-    os.environ['TMPDIR'] = str(scratch)
+    scratch = scratch_directory()
     if args.image:
         deploy(args.image, args.compose, scratch, args.root / 'backups', json.loads(args.policy.read_text()) if args.policy else None)
         return
