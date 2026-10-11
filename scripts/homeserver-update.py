@@ -32,12 +32,21 @@ SMOKE = r'''
 const fs = require('fs');
 const {decideMovieAudio} = require('/app/dist/lib/movieAudioPolicy');
 const s = JSON.parse(fs.readFileSync('/app/config/settings.json', 'utf8'));
-if (!s.movieAudio?.enabled) throw new Error('Audio policy is disabled');
-const mapping = s.movieAudio.profiles[0];
-const server = s.radarr.find(r => r.id === mapping.radarrServiceId);
+// Verify the implementation independently of the user's editable choices.
+const server = {id:0,isDefault:true,is4k:false};
+const policy = {enabled:true,kidsMode:'family',ageCutoff:12,
+ profiles:[{radarrServiceId:0,kidsProfileId:7,originalProfileId:8}],
+ exceptions:[{tmdbId:803796,preference:'pt-PT',note:'Smoke fixture'}]};
+if (s.movieAudio?.enabled) {
+ for (const server of s.radarr.filter(r => r.isDefault)) {
+  const mapping = s.movieAudio.profiles.find(p => p.radarrServiceId === server.id);
+  if (!mapping || mapping.kidsProfileId === mapping.originalProfileId)
+   throw new Error('Configured audio profiles are invalid');
+ }
+}
 const movie = (id, age) => ({id, genres:[{id:16}], release_dates:{results:[{iso_3166_1:'PT',release_dates:age == null ? [] : [{certification:`M/${age}`}]}]}});
 for (const [id, age, expected] of [[1084244,6,'pt-PT'],[157336,12,'original'],[803796,null,'pt-PT'],[999999999,null,'review']]) {
- const d = decideMovieAudio(movie(id,age),s.movieAudio,s.radarr,{serverId:server.id});
+ const d = decideMovieAudio(movie(id,age),policy,[server],{serverId:server.id});
  if (d.preference !== expected) throw new Error(`Audio smoke test failed: ${id}`);
 }
 fetch('http://127.0.0.1:5055/api/v1/status?checkUpdateAvailable=false')
