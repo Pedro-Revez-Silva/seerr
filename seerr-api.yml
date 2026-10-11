@@ -6505,6 +6505,20 @@ paths:
       responses:
         '200':
           description: Saved movie audio policy
+  /movieAudio/audienceProvider:
+    get:
+      summary: Check audience provider configuration (admin only)
+      tags: [settings]
+      responses:
+        '200':
+          description: Whether a server-side TypeSafe credential is configured
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  configured:
+                    type: boolean
   /movieAudio/{tmdbId}:
     get:
       summary: Preview automatic movie audio selection

@@ -6,6 +6,7 @@ export interface MovieAudioPolicy {
   enabled: boolean;
   kidsMode: 'family' | 'all';
   ageCutoff: number;
+  missingRatingFallback?: 'review' | 'jev';
   profiles: {
     radarrServiceId: number;
     kidsProfileId: number;
@@ -22,6 +23,7 @@ export const defaultMovieAudioPolicy: MovieAudioPolicy = {
   enabled: false,
   kidsMode: 'family',
   ageCutoff: 12,
+  missingRatingFallback: 'review',
   profiles: [],
   exceptions: [],
 };
@@ -34,6 +36,13 @@ export interface MovieAudioDecision {
   profileId?: number;
   serverId?: number;
   storedPreference?: MovieAudioPreference;
+  audience?: {
+    source: 'jev';
+    model: string;
+    choice: 'kids' | 'older' | 'uncertain';
+    confidence: number;
+    probabilities: Record<'kids' | 'older' | 'uncertain', number>;
+  };
 }
 
 export class MovieAudioReviewError extends Error {}

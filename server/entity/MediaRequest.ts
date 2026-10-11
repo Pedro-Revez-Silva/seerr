@@ -7,7 +7,7 @@ import {
 } from '@server/constants/media';
 import { getRepository } from '@server/datasource';
 import type { MediaRequestBody } from '@server/interfaces/api/requestInterfaces';
-import { decideMovieAudio } from '@server/lib/movieAudioPolicy';
+import { resolveMovieAudio } from '@server/lib/movieAudience';
 import notificationManager, { Notification } from '@server/lib/notifications';
 import overrideRules from '@server/lib/overrideRules';
 import { Permission } from '@server/lib/permissions';
@@ -321,7 +321,7 @@ export class MediaRequest {
     }
 
     if (requestBody.mediaType === MediaType.MOVIE) {
-      const audio = decideMovieAudio(
+      const audio = await resolveMovieAudio(
         tmdbMedia as TmdbMovieDetails,
         settings.movieAudio,
         settings.radarr,

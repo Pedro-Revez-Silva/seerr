@@ -17,10 +17,8 @@ import Media from '@server/entity/Media';
 import { MediaRequest } from '@server/entity/MediaRequest';
 import Season from '@server/entity/Season';
 import SeasonRequest from '@server/entity/SeasonRequest';
-import {
-  MovieAudioReviewError,
-  decideMovieAudio,
-} from '@server/lib/movieAudioPolicy';
+import { resolveMovieAudio } from '@server/lib/movieAudience';
+import { MovieAudioReviewError } from '@server/lib/movieAudioPolicy';
 import notificationManager, { Notification } from '@server/lib/notifications';
 import { getSettings } from '@server/lib/settings';
 import logger from '@server/logger';
@@ -335,7 +333,7 @@ export class MediaRequestSubscriber implements EntitySubscriberInterface<MediaRe
               entity.profileId
             )
           ) {
-            const audio = decideMovieAudio(
+            const audio = await resolveMovieAudio(
               movie,
               settings.movieAudio,
               settings.radarr,

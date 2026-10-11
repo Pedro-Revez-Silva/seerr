@@ -13,12 +13,19 @@ import useSWR from 'swr';
 const messages = defineMessages('components.Settings.MovieAudio', {
   title: 'Movie Audio',
   description:
-    'Use Portugal age ratings to select European Portuguese or original audio before a download starts. Missing ratings for children’s titles require an audio choice before approval.',
+    'Select European Portuguese for children’s films and original audio for older audiences before a download starts. Use saved movie exceptions or optional audience assessment when Portugal ratings are missing.',
   enabled: 'Enable Automatic Audio Routing',
   mode: 'Children’s Movies',
   family: 'Family and animation below the age cutoff',
   all: 'Every movie below the age cutoff',
   cutoff: 'Original Audio From Age',
+  missing: 'Missing Portugal Ratings',
+  review: 'Ask for an audio choice',
+  jev: 'Assess the intended audience automatically',
+  audienceHelp:
+    'Automatic assessment uses the synopsis and available ratings. Uncertain results still ask for an audio choice. Explicit choices, saved exceptions, and Portugal ratings take priority.',
+  providerMissing:
+    'Automatic assessment is available after the TypeSafe provider is configured on the server.',
   kidsProfile: 'PT-PT Profile',
   originalProfile: 'Original Audio Profile',
   selectProfile: 'Select a profile',
@@ -90,6 +97,9 @@ const SettingsMovieAudio = ({ servers }: { servers: RadarrSettings[] }) => {
   const intl = useIntl();
   const { addToast } = useToasts();
   const { data, mutate } = useSWR<MovieAudioPolicy>('/api/v1/movieAudio');
+  const { data: provider } = useSWR<{ configured: boolean }>(
+    '/api/v1/movieAudio/audienceProvider'
+  );
   if (!data) return null;
   const initialValues = {
     ...defaultMovieAudioPolicy,
@@ -179,6 +189,29 @@ const SettingsMovieAudio = ({ servers }: { servers: RadarrSettings[] }) => {
             </div>
             <p className="label-tip">
               {intl.formatMessage(messages.profilesHelp)}
+            </p>
+            <div className="form-row">
+              <label htmlFor="missingRatingFallback" className="text-label">
+                {intl.formatMessage(messages.missing)}
+              </label>
+              <select
+                id="missingRatingFallback"
+                name="missingRatingFallback"
+                value={values.missingRatingFallback}
+                onChange={handleChange}
+              >
+                <option value="review">
+                  {intl.formatMessage(messages.review)}
+                </option>
+                <option value="jev" disabled={!provider?.configured}>
+                  {intl.formatMessage(messages.jev)}
+                </option>
+              </select>
+            </div>
+            <p className="label-tip">
+              {intl.formatMessage(messages.audienceHelp)}{' '}
+              {!provider?.configured &&
+                intl.formatMessage(messages.providerMissing)}
             </p>
             {values.profiles.map((mapping, index) => (
               <AudioProfiles

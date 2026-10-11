@@ -22,10 +22,8 @@ import type {
   MediaRequestBody,
   RequestResultsResponse,
 } from '@server/interfaces/api/requestInterfaces';
-import {
-  MovieAudioReviewError,
-  decideMovieAudio,
-} from '@server/lib/movieAudioPolicy';
+import { resolveMovieAudio } from '@server/lib/movieAudience';
+import { MovieAudioReviewError } from '@server/lib/movieAudioPolicy';
 import { Permission } from '@server/lib/permissions';
 import { getSettings } from '@server/lib/settings';
 import logger from '@server/logger';
@@ -62,10 +60,15 @@ async function checkMovieAudioBeforeApproval(
   const movie = await new TheMovieDb().getMovie({
     movieId: request.media.tmdbId,
   });
-  const audio = decideMovieAudio(movie, settings.movieAudio, settings.radarr, {
-    serverId: request.serverId,
-    is4k: request.is4k,
-  });
+  const audio = await resolveMovieAudio(
+    movie,
+    settings.movieAudio,
+    settings.radarr,
+    {
+      serverId: request.serverId,
+      is4k: request.is4k,
+    }
+  );
   if (!audio.profileId) throw new MovieAudioReviewError(audio.reason);
   request.profileId = audio.profileId;
 }
@@ -595,7 +598,7 @@ requestRoutes.put<{ requestId: string }>(
             const movie = await new TheMovieDb().getMovie({
               movieId: request.media.tmdbId,
             });
-            const audio = decideMovieAudio(
+            const audio = await resolveMovieAudio(
               movie,
               settings.movieAudio,
               settings.radarr,

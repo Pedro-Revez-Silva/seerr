@@ -1,6 +1,6 @@
 import RadarrAPI from '@server/api/servarr/radarr';
 import TheMovieDb from '@server/api/themoviedb';
-import { decideMovieAudio } from '@server/lib/movieAudioPolicy';
+import { resolveMovieAudio } from '@server/lib/movieAudience';
 import { Permission } from '@server/lib/permissions';
 import { getSettings } from '@server/lib/settings';
 import { isAuthenticated } from '@server/middleware/auth';
@@ -12,6 +12,7 @@ const policySchema = z.object({
   enabled: z.boolean(),
   kidsMode: z.enum(['family', 'all']),
   ageCutoff: z.number().int().min(1).max(21),
+  missingRatingFallback: z.enum(['review', 'jev']).default('review'),
   profiles: z
     .array(
       z.object({
@@ -35,11 +36,25 @@ const policySchema = z.object({
 routes.get('/', isAuthenticated(Permission.ADMIN), (_req, res) => {
   res.json(getSettings().movieAudio);
 });
+routes.get(
+  '/audienceProvider',
+  isAuthenticated(Permission.ADMIN),
+  (_req, res) => {
+    res.json({ configured: !!process.env.TYPESAFE_API_KEY });
+  }
+);
 routes.post('/', isAuthenticated(Permission.ADMIN), async (req, res, next) => {
   const parsed = policySchema.safeParse(req.body);
   if (!parsed.success)
     return next({ status: 400, message: 'Invalid movie audio settings.' });
   const policy = parsed.data;
+  if (policy.missingRatingFallback === 'jev' && !process.env.TYPESAFE_API_KEY) {
+    return next({
+      status: 400,
+      message:
+        'Configure the server\u2019s TypeSafe API key before enabling audience assessment.',
+    });
+  }
   if (
     new Set(policy.profiles.map((p) => p.radarrServiceId)).size !==
       policy.profiles.length ||
@@ -120,7 +135,7 @@ routes.get('/:tmdbId', async (req, res, next) => {
   try {
     const settings = getSettings();
     const movie = await new TheMovieDb().getMovie({ movieId: id });
-    const decision = decideMovieAudio(
+    const decision = await resolveMovieAudio(
       movie,
       settings.movieAudio,
       settings.radarr,
