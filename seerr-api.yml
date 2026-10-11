@@ -6485,6 +6485,54 @@ paths:
                           type: string
                         title:
                           type: string
+  /movieAudio:
+    get:
+      summary: Get movie audio policy (admin only)
+      tags: [settings]
+      responses:
+        '200':
+          description: Current movie audio policy
+    post:
+      summary: Set movie audio policy (admin only)
+      tags: [settings]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        '200':
+          description: Saved movie audio policy
+  /movieAudio/{tmdbId}:
+    get:
+      summary: Preview automatic movie audio selection
+      tags: [request]
+      parameters:
+        - in: path
+          name: tmdbId
+          required: true
+          schema:
+            type: integer
+            minimum: 1
+        - in: query
+          name: serverId
+          schema:
+            type: integer
+            minimum: 0
+        - in: query
+          name: is4k
+          schema:
+            type: boolean
+        - in: query
+          name: profileId
+          schema:
+            type: integer
+            minimum: 1
+      responses:
+        '200':
+          description: Audio decision and reason
   /request:
     get:
       summary: Get all requests
@@ -6604,6 +6652,10 @@ paths:
                   type: number
                 profileId:
                   type: number
+                audioPreference:
+                  type: string
+                  enum: [automatic, pt-PT, original]
+                  description: Explicit audio choice; requires advanced request permissions
                 rootFolder:
                   type: string
                 languageProfileId:
@@ -6714,6 +6766,10 @@ paths:
                   type: number
                 profileId:
                   type: number
+                audioPreference:
+                  type: string
+                  enum: [automatic, pt-PT, original]
+                  description: Explicit audio choice; requires advanced request permissions
                 rootFolder:
                   type: string
                 languageProfileId:

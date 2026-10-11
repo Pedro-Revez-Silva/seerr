@@ -1,0 +1,125 @@
+name: Homeserver verification and upstream updates
+on:
+  push:
+    branches: [feature/homeserver-audio-policy]
+  workflow_dispatch:
+    inputs:
+      sync_upstream:
+        description: Integrate the latest stable upstream release
+        type: boolean
+        default: false
+  schedule:
+    - cron: '17 2 * * *'
+concurrency:
+  group: homeserver-maintenance
+  cancel-in-progress: false
+permissions:
+  contents: read
+jobs:
+  prepare:
+    if: github.repository == 'Pedro-Revez-Silva/seerr'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    outputs:
+      ref: ${{ steps.prepare.outputs.ref }}
+      base: ${{ steps.prepare.outputs.base }}
+      promote: ${{ steps.prepare.outputs.promote }}
+      verify: ${{ steps.prepare.outputs.verify }}
+    steps:
+      - uses: actions/github-script@v7
+        id: prepare
+        with:
+          script: |
+            const branch = 'feature/homeserver-audio-policy';
+            const repo = context.repo;
+            const base = (await github.rest.git.getRef({...repo, ref: `heads/${branch}`})).data.object.sha;
+            core.setOutput('verify', 'true');
+            core.setOutput('base', base);
+            core.setOutput('ref', base);
+            core.setOutput('promote', 'false');
+            if (context.eventName !== 'schedule' && !context.payload.inputs?.sync_upstream) return;
+            if (context.payload.inputs?.sync_upstream === 'false' && context.eventName !== 'schedule') return;
+            const release = (await github.rest.repos.getLatestRelease({owner: 'seerr-team', repo: 'seerr'})).data;
+            if (!/^v\d+\.\d+\.\d+$/.test(release.tag_name) || release.prerelease || release.draft) throw new Error('Invalid stable release');
+            const tag = await github.rest.repos.getCommit({owner: 'seerr-team', repo: 'seerr', ref: release.tag_name});
+            const head = tag.data.sha;
+            const compare = (await github.rest.repos.compareCommits({...repo, base: head, head: base})).data;
+            if (['ahead', 'identical'].includes(compare.status)) {
+              const statuses = (await github.rest.repos.listCommitStatusesForRef({...repo, ref: base})).data;
+              if (statuses.find(s => s.context === 'homeserver/verified')?.state === 'success') core.setOutput('verify', 'false');
+              return;
+            }
+            const candidate = `update/upstream-${release.tag_name}-${base.slice(0, 8)}`;
+            try { await github.rest.git.createRef({...repo, ref: `refs/heads/${candidate}`, sha: base}); }
+            catch (e) { if (e.status !== 422) throw e; }
+            await github.rest.repos.merge({...repo, base: candidate, head, commit_message: `chore: integrate upstream ${release.tag_name}`});
+            const sha = (await github.rest.git.getRef({...repo, ref: `heads/${candidate}`})).data.object.sha;
+            const commit = (await github.rest.repos.getCommit({...repo, ref: sha})).data;
+            if (!commit.commit.verification.verified) throw new Error('Upstream integration commit must have a verified signature');
+            core.setOutput('ref', sha);
+            core.setOutput('promote', 'true');
+  verify:
+    if: needs.prepare.outputs.verify == 'true'
+    needs: prepare
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare.outputs.ref }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: pnpm/action-setup@v4
+      - uses: actions/cache@v4
+        with:
+          path: ~/.local/share/pnpm/store
+          key: homeserver-pnpm-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+      - run: pnpm install --frozen-lockfile
+        env:
+          CYPRESS_INSTALL_BINARY: '0'
+      - run: pnpm lint && pnpm typecheck && pnpm format:check
+      - run: pnpm test
+      - run: python3 -m unittest discover -s scripts -p 'test_*.py'
+      - run: docker build --build-arg COMMIT_TAG="$TESTED_SHA" -t seerr-homeserver:verified .
+        env:
+          TESTED_SHA: ${{ needs.prepare.outputs.ref }}
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: unit-test-report
+          path: report.xml
+  promote:
+    needs: [prepare, verify]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      statuses: write
+      actions: write
+    steps:
+      - uses: actions/github-script@v7
+        env:
+          TESTED_SHA: ${{ needs.prepare.outputs.ref }}
+          BASE_SHA: ${{ needs.prepare.outputs.base }}
+          PROMOTE: ${{ needs.prepare.outputs.promote }}
+        with:
+          script: |
+            const repo = context.repo;
+            const sha = process.env.TESTED_SHA;
+            const branch = 'feature/homeserver-audio-policy';
+            // The homeserver only installs commits with this successful status.
+            await github.rest.repos.createCommitStatus({...repo, sha, state: 'success', context: 'homeserver/verified', description: 'Lint, types, format, tests and container build passed', target_url: `https://github.com/${repo.owner}/${repo.repo}/actions/runs/${context.runId}`});
+            if (process.env.PROMOTE === 'true') {
+              const current = (await github.rest.git.getRef({...repo, ref: `heads/${branch}`})).data.object.sha;
+              if (current !== process.env.BASE_SHA) throw new Error('Maintained branch changed during verification');
+              await github.rest.git.updateRef({...repo, ref: `heads/${branch}`, sha, force: false});
+            }
+            // Upstream publishing, notifications and issue bots do not run in this fork.
+            const workflows = await github.paginate(github.rest.actions.listRepoWorkflows, {...repo, per_page: 100});
+            for (const workflow of workflows) {
+              if (workflow.path !== '.github/workflows/homeserver.yml' && workflow.state === 'active') {
+                await github.rest.actions.disableWorkflow({...repo, workflow_id: workflow.id});
+              }
+            }

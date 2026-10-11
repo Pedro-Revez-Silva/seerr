@@ -1,4 +1,6 @@
 import { MediaServerType } from '@server/constants/server';
+import type { MovieAudioPolicy } from '@server/lib/movieAudioPolicy';
+import { defaultMovieAudioPolicy } from '@server/lib/movieAudioPolicy';
 import { Permission } from '@server/lib/permissions';
 import { runMigrations } from '@server/lib/settings/migrator';
 import type { AvailableLocale } from '@server/types/languages';
@@ -384,6 +386,7 @@ export interface AllSettings {
   jellyfin: JellyfinSettings;
   tautulli: TautulliSettings;
   radarr: RadarrSettings[];
+  movieAudio: MovieAudioPolicy;
   sonarr: SonarrSettings[];
   public: PublicSettings;
   notifications: NotificationSettings;
@@ -462,6 +465,7 @@ class Settings {
         anime: MetadataProviderType.TMDB,
       },
       radarr: [],
+      movieAudio: structuredClone(defaultMovieAudioPolicy),
       sonarr: [],
       public: {
         initialized: false,
@@ -688,6 +692,14 @@ class Settings {
 
   get radarr(): RadarrSettings[] {
     return this.data.radarr;
+  }
+
+  get movieAudio(): MovieAudioPolicy {
+    return this.data.movieAudio ?? structuredClone(defaultMovieAudioPolicy);
+  }
+
+  set movieAudio(data: MovieAudioPolicy) {
+    this.data.movieAudio = data;
   }
 
   set radarr(data: RadarrSettings[]) {

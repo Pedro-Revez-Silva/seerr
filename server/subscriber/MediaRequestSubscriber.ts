@@ -17,6 +17,10 @@ import Media from '@server/entity/Media';
 import { MediaRequest } from '@server/entity/MediaRequest';
 import Season from '@server/entity/Season';
 import SeasonRequest from '@server/entity/SeasonRequest';
+import {
+  MovieAudioReviewError,
+  decideMovieAudio,
+} from '@server/lib/movieAudioPolicy';
 import notificationManager, { Notification } from '@server/lib/notifications';
 import { getSettings } from '@server/lib/settings';
 import logger from '@server/logger';
@@ -319,6 +323,29 @@ export class MediaRequestSubscriber implements EntitySubscriberInterface<MediaRe
         });
         const movie = await tmdb.getMovie({ movieId: entity.media.tmdbId });
 
+        if (settings.movieAudio.enabled) {
+          const mapping = settings.movieAudio.profiles.find(
+            (p) => p.radarrServiceId === radarrSettings.id
+          );
+          // Stored audio profiles preserve an explicit request choice across approval/retry.
+          // Older requests using a generic profile are classified before any search.
+          if (
+            !mapping ||
+            ![mapping.kidsProfileId, mapping.originalProfileId].includes(
+              entity.profileId
+            )
+          ) {
+            const audio = decideMovieAudio(
+              movie,
+              settings.movieAudio,
+              settings.radarr,
+              { serverId: radarrSettings.id, is4k: entity.is4k }
+            );
+            if (!audio.profileId) throw new MovieAudioReviewError(audio.reason);
+            qualityProfile = audio.profileId;
+          }
+        }
+
         if (radarrSettings.tagRequests) {
           const radarrTags = await radarr.getTags();
           // old tags had space around the hyphen
@@ -365,6 +392,7 @@ export class MediaRequestSubscriber implements EntitySubscriberInterface<MediaRe
         }
 
         const radarrMovieOptions: RadarrMovieOptions = {
+          enforceAudioProfile: settings.movieAudio.enabled,
           profileId: qualityProfile,
           qualityProfileId: qualityProfile,
           rootFolderPath: rootFolder,

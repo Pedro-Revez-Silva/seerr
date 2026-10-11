@@ -21,6 +21,7 @@ import axios from 'axios';
 import { Fragment, useState } from 'react';
 import { useIntl } from 'react-intl';
 import useSWR, { mutate } from 'swr';
+import SettingsMovieAudio from './SettingsMovieAudio';
 
 const messages = defineMessages('components.Settings', {
   services: 'Services',
@@ -267,6 +268,7 @@ const SettingsServices = () => {
         ]}
       />
       <div className="mb-6">
+        {radarrData && <SettingsMovieAudio servers={radarrData} />}
         <h3 className="heading">
           {intl.formatMessage(messages.radarrsettings)}
         </h3>

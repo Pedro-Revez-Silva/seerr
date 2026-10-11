@@ -1,4 +1,5 @@
 import TheMovieDb from '@server/api/themoviedb';
+import type { TmdbMovieDetails } from '@server/api/themoviedb/interfaces';
 import {
   MediaRequestStatus,
   MediaStatus,
@@ -6,6 +7,7 @@ import {
 } from '@server/constants/media';
 import { getRepository } from '@server/datasource';
 import type { MediaRequestBody } from '@server/interfaces/api/requestInterfaces';
+import { decideMovieAudio } from '@server/lib/movieAudioPolicy';
 import notificationManager, { Notification } from '@server/lib/notifications';
 import overrideRules from '@server/lib/overrideRules';
 import { Permission } from '@server/lib/permissions';
@@ -266,6 +268,19 @@ export class MediaRequest {
     let profileId = requestBody.profileId;
     let tags = requestBody.tags;
 
+    if (
+      requestBody.audioPreference &&
+      requestBody.audioPreference !== 'automatic' &&
+      !user.hasPermission(
+        [Permission.MANAGE_REQUESTS, Permission.REQUEST_ADVANCED],
+        { type: 'or' }
+      )
+    ) {
+      throw new RequestPermissionError(
+        'You do not have permission to override movie audio.'
+      );
+    }
+
     const ruleResult = await overrideRules({
       mediaType: requestBody.mediaType,
       is4k: requestBody.is4k || false,
@@ -306,6 +321,25 @@ export class MediaRequest {
     }
 
     if (requestBody.mediaType === MediaType.MOVIE) {
+      const audio = decideMovieAudio(
+        tmdbMedia as TmdbMovieDetails,
+        settings.movieAudio,
+        settings.radarr,
+        {
+          serverId: requestBody.serverId,
+          is4k: requestBody.is4k,
+          preference: requestBody.audioPreference,
+        }
+      );
+      if (audio.enabled) {
+        // A default advanced-request profile must not bypass automatic audio routing.
+        profileId = audio.profileId;
+        logger.info('Movie audio policy applied', {
+          label: 'Movie Audio',
+          tmdbId: tmdbMedia.id,
+          ...audio,
+        });
+      }
       await mediaRepository.save(media);
 
       const request = new MediaRequest({
@@ -313,34 +347,38 @@ export class MediaRequest {
         media,
         requestedBy: requestUser,
         // If the user is an admin or has the "auto approve" permission, automatically approve the request
-        status: user.hasPermission(
-          [
-            requestBody.is4k
-              ? Permission.AUTO_APPROVE_4K
-              : Permission.AUTO_APPROVE,
-            requestBody.is4k
-              ? Permission.AUTO_APPROVE_4K_MOVIE
-              : Permission.AUTO_APPROVE_MOVIE,
-            Permission.MANAGE_REQUESTS,
-          ],
-          { type: 'or' }
-        )
-          ? MediaRequestStatus.APPROVED
-          : MediaRequestStatus.PENDING,
-        modifiedBy: user.hasPermission(
-          [
-            requestBody.is4k
-              ? Permission.AUTO_APPROVE_4K
-              : Permission.AUTO_APPROVE,
-            requestBody.is4k
-              ? Permission.AUTO_APPROVE_4K_MOVIE
-              : Permission.AUTO_APPROVE_MOVIE,
-            Permission.MANAGE_REQUESTS,
-          ],
-          { type: 'or' }
-        )
-          ? user
-          : undefined,
+        status:
+          audio.preference !== 'review' &&
+          user.hasPermission(
+            [
+              requestBody.is4k
+                ? Permission.AUTO_APPROVE_4K
+                : Permission.AUTO_APPROVE,
+              requestBody.is4k
+                ? Permission.AUTO_APPROVE_4K_MOVIE
+                : Permission.AUTO_APPROVE_MOVIE,
+              Permission.MANAGE_REQUESTS,
+            ],
+            { type: 'or' }
+          )
+            ? MediaRequestStatus.APPROVED
+            : MediaRequestStatus.PENDING,
+        modifiedBy:
+          audio.preference !== 'review' &&
+          user.hasPermission(
+            [
+              requestBody.is4k
+                ? Permission.AUTO_APPROVE_4K
+                : Permission.AUTO_APPROVE,
+              requestBody.is4k
+                ? Permission.AUTO_APPROVE_4K_MOVIE
+                : Permission.AUTO_APPROVE_MOVIE,
+              Permission.MANAGE_REQUESTS,
+            ],
+            { type: 'or' }
+          )
+            ? user
+            : undefined,
         is4k: requestBody.is4k,
         serverId: requestBody.serverId,
         profileId: profileId,

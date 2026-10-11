@@ -1,5 +1,6 @@
 import type { MediaType } from '@server/constants/media';
 import type { MediaRequest } from '@server/entity/MediaRequest';
+import type { MovieAudioPreference } from '@server/lib/movieAudioPolicy';
 import type { NonFunctionProperties, PaginatedResponse } from './common';
 
 export interface RequestResultsResponse extends PaginatedResponse {
@@ -21,6 +22,7 @@ export type MediaRequestBody = {
   is4k?: boolean;
   serverId?: number;
   profileId?: number;
+  audioPreference?: MovieAudioPreference;
   profileName?: string;
   rootFolder?: string;
   languageProfileId?: number;

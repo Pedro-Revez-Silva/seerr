@@ -90,6 +90,11 @@ const stream = run({
   testNamePatterns: opts.testNamePattern,
 });
 
+// Programmatic node:test runs must fail the process when a test fails.
+stream.on('test:fail', () => {
+  process.exitCode = 1;
+});
+
 // In CI, write a JUnit report to a file for use by GitHub
 if (process.env.CI) {
   const reportStream = createWriteStream(join(BASE_DIR, 'report.xml'));

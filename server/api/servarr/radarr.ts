@@ -13,6 +13,7 @@ export interface RadarrMovieOptions {
   tmdbId: number;
   monitored?: boolean;
   searchNow?: boolean;
+  enforceAudioProfile?: boolean;
 }
 
 export interface RadarrMovie {
@@ -140,6 +141,20 @@ class RadarrAPI extends ServarrBase<{ movieId: number }> {
     try {
       const movie = await this.getMovieByTmdbId(options.tmdbId);
 
+      // A policy change must reach an existing movie before any search starts.
+      if (
+        options.enforceAudioProfile &&
+        movie.id &&
+        movie.qualityProfileId !== options.qualityProfileId
+      ) {
+        const updated = await this.axios.put<RadarrMovie>('/movie', {
+          ...movie,
+          qualityProfileId: options.qualityProfileId,
+          tags: Array.from(new Set([...movie.tags, ...options.tags])),
+        });
+        Object.assign(movie, updated.data);
+      }
+
       if (movie.hasFile) {
         logger.info(
           'Title already exists and is available. Skipping add and returning success',
@@ -185,7 +200,7 @@ class RadarrAPI extends ServarrBase<{ movieId: number }> {
           });
 
           if (options.searchNow) {
-            this.searchMovie(response.data.id);
+            await this.searchMovie(response.data.id);
           }
 
           return response.data;
@@ -217,7 +232,7 @@ class RadarrAPI extends ServarrBase<{ movieId: number }> {
               movieTitle: movie.title,
             }
           );
-          this.searchMovie(movie.id);
+          await this.searchMovie(movie.id);
         }
 
         return movie;

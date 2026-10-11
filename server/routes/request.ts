@@ -1,5 +1,6 @@
 import RadarrAPI from '@server/api/servarr/radarr';
 import SonarrAPI from '@server/api/servarr/sonarr';
+import TheMovieDb from '@server/api/themoviedb';
 import {
   MediaRequestStatus,
   MediaStatus,
@@ -21,6 +22,10 @@ import type {
   MediaRequestBody,
   RequestResultsResponse,
 } from '@server/interfaces/api/requestInterfaces';
+import {
+  MovieAudioReviewError,
+  decideMovieAudio,
+} from '@server/lib/movieAudioPolicy';
 import { Permission } from '@server/lib/permissions';
 import { getSettings } from '@server/lib/settings';
 import logger from '@server/logger';
@@ -34,6 +39,36 @@ import requestLock, {
 import { Router } from 'express';
 
 const requestRoutes = Router();
+
+async function checkMovieAudioBeforeApproval(
+  request: MediaRequest
+): Promise<void> {
+  const settings = getSettings();
+  if (request.type !== MediaType.MOVIE || !settings.movieAudio.enabled) return;
+  const server =
+    request.serverId != null
+      ? settings.radarr.find((s) => s.id === request.serverId)
+      : settings.radarr.find((s) => s.isDefault && s.is4k === request.is4k);
+  const mapping = settings.movieAudio.profiles.find(
+    (p) => p.radarrServiceId === server?.id
+  );
+  if (
+    mapping &&
+    [mapping.kidsProfileId, mapping.originalProfileId].includes(
+      request.profileId
+    )
+  )
+    return;
+  const movie = await new TheMovieDb().getMovie({
+    movieId: request.media.tmdbId,
+  });
+  const audio = decideMovieAudio(movie, settings.movieAudio, settings.radarr, {
+    serverId: request.serverId,
+    is4k: request.is4k,
+  });
+  if (!audio.profileId) throw new MovieAudioReviewError(audio.reason);
+  request.profileId = audio.profileId;
+}
 
 requestRoutes.get<Record<string, unknown>, RequestResultsResponse>(
   '/',
@@ -539,8 +574,40 @@ requestRoutes.put<{ requestId: string }>(
               }
             }
 
+            const settings = getSettings();
+            const priorServer =
+              request.serverId != null
+                ? settings.radarr.find((s) => s.id === request.serverId)
+                : settings.radarr.find(
+                    (s) => s.isDefault && s.is4k === request.is4k
+                  );
+            const priorMapping = settings.movieAudio.profiles.find(
+              (p) => p.radarrServiceId === priorServer?.id
+            );
+            const savedPreference =
+              priorMapping && request.profileId === priorMapping.kidsProfileId
+                ? 'pt-PT'
+                : priorMapping &&
+                    request.profileId === priorMapping.originalProfileId
+                  ? 'original'
+                  : 'automatic';
             request.serverId = req.body.serverId;
-            request.profileId = req.body.profileId;
+            const movie = await new TheMovieDb().getMovie({
+              movieId: request.media.tmdbId,
+            });
+            const audio = decideMovieAudio(
+              movie,
+              settings.movieAudio,
+              settings.radarr,
+              {
+                serverId: req.body.serverId,
+                is4k: request.is4k,
+                preference: req.body.audioPreference ?? savedPreference,
+              }
+            );
+            request.profileId = audio.enabled
+              ? (audio.profileId as number)
+              : req.body.profileId;
             request.rootFolder = req.body.rootFolder;
             request.tags = req.body.tags;
             request.requestedBy = requestUser as User;
@@ -762,6 +829,7 @@ requestRoutes.post<{
         }
 
         // this also triggers updating the parent media's status & sending to *arr
+        await checkMovieAudioBeforeApproval(request);
         request.status = MediaRequestStatus.APPROVED;
         request.modifiedBy = req.user;
         await requestRepository.save(request);
@@ -773,7 +841,11 @@ requestRoutes.post<{
         label: 'Media Request',
         message: e.message,
       });
-      next({ status: 404, message: 'Request not found.' });
+      next({
+        status: e instanceof MovieAudioReviewError ? 400 : 404,
+        message:
+          e instanceof MovieAudioReviewError ? e.message : 'Request not found.',
+      });
     }
   }
 );
@@ -818,6 +890,8 @@ requestRoutes.post<{
           });
         }
 
+        if (newStatus === MediaRequestStatus.APPROVED)
+          await checkMovieAudioBeforeApproval(request);
         request.status = newStatus;
         request.modifiedBy = req.user;
         await requestRepository.save(request);
@@ -829,7 +903,11 @@ requestRoutes.post<{
         label: 'Media Request',
         message: e.message,
       });
-      next({ status: 404, message: 'Request not found.' });
+      next({
+        status: e instanceof MovieAudioReviewError ? 400 : 404,
+        message:
+          e instanceof MovieAudioReviewError ? e.message : 'Request not found.',
+      });
     }
   }
 );

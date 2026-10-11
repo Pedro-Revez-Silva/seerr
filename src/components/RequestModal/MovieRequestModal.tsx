@@ -7,16 +7,21 @@ import useToasts from '@app/hooks/useToasts';
 import { useUser } from '@app/hooks/useUser';
 import globalMessages from '@app/i18n/globalMessages';
 import defineMessages from '@app/utils/defineMessages';
-import { MediaStatus } from '@server/constants/media';
+import { MediaRequestStatus, MediaStatus } from '@server/constants/media';
 import type { MediaRequest } from '@server/entity/MediaRequest';
 import type { NonFunctionProperties } from '@server/interfaces/api/common';
 import type { QuotaResponse } from '@server/interfaces/api/userInterfaces';
+import type {
+  MovieAudioDecision,
+  MovieAudioPreference,
+} from '@server/lib/movieAudioPolicy';
 import { Permission } from '@server/lib/permissions';
 import type { MovieDetails } from '@server/models/Movie';
 import axios from 'axios';
 import { useCallback, useEffect, useState } from 'react';
 import { useIntl } from 'react-intl';
 import useSWR, { mutate } from 'swr';
+import MovieAudioChoice from './MovieAudioChoice';
 
 const messages = defineMessages('components.RequestModal', {
   requestadmin: 'This request will be approved automatically.',
@@ -55,6 +60,7 @@ const MovieRequestModal = ({
   is4k = false,
 }: RequestModalProps) => {
   const [isUpdating, setIsUpdating] = useState(false);
+  const [selectedAudio, setAudioPreference] = useState<MovieAudioPreference>();
   const [requestOverrides, setRequestOverrides] =
     useState<RequestOverrides | null>(null);
   const { addToast } = useToasts();
@@ -63,6 +69,22 @@ const MovieRequestModal = ({
   });
   const intl = useIntl();
   const { user, hasPermission } = useUser();
+  const { data: audioDecision } = useSWR<MovieAudioDecision>(
+    `/api/v1/movieAudio/${tmdbId}?is4k=${is4k}${requestOverrides?.server !== undefined ? `&serverId=${requestOverrides.server}` : ''}${editRequest?.profileId ? `&profileId=${editRequest.profileId}` : ''}`
+  );
+  const audioPreference =
+    selectedAudio ?? audioDecision?.storedPreference ?? 'automatic';
+  const audioChoice = (
+    <MovieAudioChoice
+      decision={audioDecision}
+      preference={audioPreference}
+      onChange={setAudioPreference}
+      canOverride={hasPermission(
+        [Permission.REQUEST_ADVANCED, Permission.MANAGE_REQUESTS],
+        { type: 'or' }
+      )}
+    />
+  );
   const { data: quota } = useSWR<QuotaResponse>(
     user &&
       (!requestOverrides?.user?.id || hasPermission(Permission.MANAGE_USERS))
@@ -95,6 +117,7 @@ const MovieRequestModal = ({
         mediaType: 'movie',
         is4k,
         ignoreQuota: requestOverrides?.ignoreQuota,
+        audioPreference,
         ...overrideParams,
       });
       mutate('/api/v1/request?filter=all&take=10&sort=modified&skip=0');
@@ -103,14 +126,7 @@ const MovieRequestModal = ({
       if (response.data) {
         if (onComplete) {
           onComplete(
-            hasPermission(
-              is4k ? Permission.AUTO_APPROVE_4K : Permission.AUTO_APPROVE
-            ) ||
-              hasPermission(
-                is4k
-                  ? Permission.AUTO_APPROVE_4K_MOVIE
-                  : Permission.AUTO_APPROVE_MOVIE
-              )
+            response.data.status === MediaRequestStatus.APPROVED
               ? MediaStatus.PROCESSING
               : MediaStatus.PENDING
           );
@@ -125,23 +141,29 @@ const MovieRequestModal = ({
           { appearance: 'success', autoDismiss: true }
         );
       }
-    } catch {
-      addToast(intl.formatMessage(messages.requesterror), {
-        appearance: 'error',
-        autoDismiss: true,
-      });
+    } catch (error) {
+      addToast(
+        axios.isAxiosError(error)
+          ? (error.response?.data?.message ??
+              intl.formatMessage(messages.requesterror))
+          : intl.formatMessage(messages.requesterror),
+        {
+          appearance: 'error',
+          autoDismiss: true,
+        }
+      );
     } finally {
       setIsUpdating(false);
     }
   }, [
     requestOverrides,
+    audioPreference,
     data?.id,
     data?.title,
     is4k,
     onComplete,
     addToast,
     intl,
-    hasPermission,
   ]);
 
   const cancelRequest = async () => {
@@ -184,6 +206,7 @@ const MovieRequestModal = ({
         rootFolder: requestOverrides?.folder,
         userId: requestOverrides?.user?.id,
         tags: requestOverrides?.tags,
+        audioPreference: selectedAudio,
       });
 
       if (alsoApproveRequest) {
@@ -213,11 +236,17 @@ const MovieRequestModal = ({
       if (onComplete) {
         onComplete(MediaStatus.PENDING);
       }
-    } catch {
-      addToast(<span>{intl.formatMessage(messages.errorediting)}</span>, {
-        appearance: 'error',
-        autoDismiss: true,
-      });
+    } catch (error) {
+      addToast(
+        axios.isAxiosError(error)
+          ? (error.response?.data?.message ??
+              intl.formatMessage(messages.errorediting))
+          : intl.formatMessage(messages.errorediting),
+        {
+          appearance: 'error',
+          autoDismiss: true,
+        }
+      );
     } finally {
       setIsUpdating(false);
     }
@@ -285,6 +314,7 @@ const MovieRequestModal = ({
           : intl.formatMessage(messages.requestfrom, {
               username: editRequest.requestedBy.displayName,
             })}
+        {audioChoice}
         {hasPermission(
           [Permission.REQUEST_ADVANCED, Permission.MANAGE_REQUESTS],
           { type: 'or' }
@@ -343,14 +373,18 @@ const MovieRequestModal = ({
       okButtonType={'primary'}
       backdrop={`https://image.tmdb.org/t/p/w1920_and_h800_multi_faces/${data?.backdropPath}`}
     >
-      {hasAutoApprove && !quota?.movie.restricted && (
-        <div className="mt-6">
-          <Alert
-            title={intl.formatMessage(messages.requestadmin)}
-            type="info"
-          />
-        </div>
-      )}
+      {audioChoice}
+      {hasAutoApprove &&
+        !quota?.movie.restricted &&
+        (audioPreference !== 'automatic' ||
+          audioDecision?.preference !== 'review') && (
+          <div className="mt-6">
+            <Alert
+              title={intl.formatMessage(messages.requestadmin)}
+              type="info"
+            />
+          </div>
+        )}
       {(quota?.movie.limit ?? 0) > 0 && (
         <QuotaDisplay
           mediaType="movie"

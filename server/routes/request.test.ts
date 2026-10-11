@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { before, beforeEach, describe, it, mock } from 'node:test';
+import { after, before, beforeEach, describe, it, mock } from 'node:test';
 
 import TheMovieDb from '@server/api/themoviedb';
 import type {
@@ -18,6 +18,7 @@ import OverrideRule from '@server/entity/OverrideRule';
 import Season from '@server/entity/Season';
 import SeasonRequest from '@server/entity/SeasonRequest';
 import { User } from '@server/entity/User';
+import { defaultMovieAudioPolicy } from '@server/lib/movieAudioPolicy';
 import { Permission } from '@server/lib/permissions';
 import type { RadarrSettings, SonarrSettings } from '@server/lib/settings';
 import { getSettings } from '@server/lib/settings';
@@ -76,6 +77,22 @@ function fakeTmdbMovie(tmdbId: number): TmdbMovieDetails {
     original_language: 'en',
     keywords: { keywords: [] },
     external_ids: {},
+    ...(tmdbId >= 880001 && tmdbId <= 880004
+      ? {
+          genres: [{ id: 16, name: 'Animation' }],
+          release_dates: {
+            results: [
+              {
+                iso_3166_1: 'PT',
+                release_dates:
+                  tmdbId === 880003
+                    ? []
+                    : [{ certification: tmdbId === 880002 ? 'M/12' : 'M/6' }],
+              },
+            ],
+          },
+        }
+      : {}),
   } as unknown as TmdbMovieDetails;
 }
 
@@ -170,6 +187,100 @@ function createApp() {
 
 before(async () => {
   app = createApp();
+});
+
+describe('movie audio request routing', () => {
+  let send: ReturnType<typeof mock.method>;
+  let previousRadarr: RadarrSettings[];
+  before(() => {
+    previousRadarr = getSettings().radarr;
+    send = mock.method(
+      MediaRequestSubscriber.prototype,
+      'sendToRadarr',
+      async () => undefined
+    );
+  });
+  after(() => {
+    send.mock.restore();
+    getSettings().radarr = previousRadarr;
+    getSettings().movieAudio = structuredClone(defaultMovieAudioPolicy);
+  });
+  beforeEach(() => {
+    configureRadarr([{}]);
+    getSettings().movieAudio = {
+      enabled: true,
+      kidsMode: 'family',
+      ageCutoff: 12,
+      profiles: [
+        { radarrServiceId: 0, kidsProfileId: 7, originalProfileId: 8 },
+      ],
+      exceptions: [],
+    };
+    send.mock.resetCalls();
+  });
+  it('overrides an advanced requester default before forwarding to Radarr', async () => {
+    const admin = await loginAs('admin@seerr.dev', 'test1234');
+    const res = await admin
+      .post('/request')
+      .send({ mediaType: 'movie', mediaId: 880001, serverId: 0, profileId: 1 });
+    assert.equal(res.status, 201);
+    assert.equal(res.body.profileId, 7);
+    assert.equal(res.body.status, MediaRequestStatus.APPROVED);
+    assert.equal(
+      (send.mock.calls.at(-1)?.arguments[0] as MediaRequest).profileId,
+      7
+    );
+  });
+  it('routes 12+ animation to original and respects an explicit audio choice', async () => {
+    const admin = await loginAs('admin@seerr.dev', 'test1234');
+    const res = await admin
+      .post('/request')
+      .send({ mediaType: 'movie', mediaId: 880002 });
+    assert.equal(res.status, 201);
+    assert.equal(res.body.profileId, 8);
+    const choice = await admin.post('/request').send({
+      mediaType: 'movie',
+      mediaId: 880004,
+      audioPreference: 'original',
+    });
+    assert.equal(choice.status, 201);
+    assert.equal(choice.body.profileId, 8);
+  });
+  it('holds missing ratings and blocks approval until audio is chosen', async () => {
+    const admin = await loginAs('admin@seerr.dev', 'test1234');
+    const res = await admin
+      .post('/request')
+      .send({ mediaType: 'movie', mediaId: 880003 });
+    assert.equal(res.status, 201);
+    assert.equal(res.body.status, MediaRequestStatus.PENDING);
+    const approve = await admin.post(`/request/${res.body.id}/approve`);
+    assert.equal(approve.status, 400);
+    const edit = await admin
+      .put(`/request/${res.body.id}`)
+      .send({ mediaType: 'movie', serverId: 0, audioPreference: 'pt-PT' });
+    assert.equal(edit.status, 200);
+    assert.equal(edit.body.profileId, 7);
+    const unchanged = await admin
+      .put(`/request/${res.body.id}`)
+      .send({ mediaType: 'movie', serverId: 0, profileId: 1 });
+    assert.equal(unchanged.status, 200);
+    assert.equal(unchanged.body.profileId, 7);
+    const accepted = await admin.post(`/request/${res.body.id}/approve`);
+    assert.equal(accepted.status, 200);
+    assert.equal(
+      (send.mock.calls.at(-1)?.arguments[0] as MediaRequest).profileId,
+      7
+    );
+  });
+  it('rejects audio overrides from a normal requester', async () => {
+    const user = await loginAs('demo@seerr.dev', 'test1234');
+    const res = await user.post('/request').send({
+      mediaType: 'movie',
+      mediaId: 880001,
+      audioPreference: 'original',
+    });
+    assert.equal(res.status, 403);
+  });
 });
 
 beforeEach(() => {
